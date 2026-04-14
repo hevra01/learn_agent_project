@@ -1,18 +1,42 @@
-import { execFile } from "child_process";
-import { promisify } from "util";
+import { spawn } from "child_process";
 import { Idea, Competitor } from "./types";
-
-const exec = promisify(execFile);
 
 const CLAUDE_PATH = "/home/hpetekka/.local/bin/claude";
 
 async function askClaude(prompt: string): Promise<string> {
-  const { stdout } = await exec(
-    CLAUDE_PATH,
-    ["--print", prompt, "--output-format", "text", "--bare", "--no-session-persistence"],
-    { timeout: 120_000, maxBuffer: 1024 * 1024 }
-  );
-  return stdout.trim();
+  return new Promise((resolve, reject) => {
+    const child = spawn(CLAUDE_PATH, [
+      "--print",
+      "--output-format", "text",
+      "--bare",
+      "--no-session-persistence",
+    ]);
+
+    let stdout = "";
+    let stderr = "";
+
+    child.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
+    child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
+
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code !== 0) {
+        reject(new Error(`Claude CLI exited with code ${code}: ${stderr}`));
+      } else {
+        resolve(stdout.trim());
+      }
+    });
+
+    // Pipe the prompt via stdin to avoid argument length limits and stdin warnings
+    child.stdin.write(prompt);
+    child.stdin.end();
+
+    // Kill if it takes too long
+    setTimeout(() => {
+      child.kill("SIGTERM");
+      reject(new Error("Claude CLI timed out after 120 seconds"));
+    }, 120_000);
+  });
 }
 
 /** Ask Claude to return JSON. Retries once if parsing fails. */
